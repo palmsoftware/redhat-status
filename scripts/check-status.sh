@@ -8,7 +8,6 @@ BASE_URL="https://status.redhat.com/api/v2"
 FAIL_ON_OUTAGE="${INPUT_FAIL_ON_OUTAGE:-false}"
 COMPONENTS_FILTER="${INPUT_COMPONENTS:-}"
 
-# Fetch a URL with retry logic (3 attempts, exponential backoff)
 api_fetch() {
   local url="$1"
   local attempt=1
@@ -36,11 +35,9 @@ api_fetch() {
 echo "🔍 Checking Red Hat service status..."
 echo ""
 
-# Fetch all three endpoints
 status_json=$(api_fetch "${BASE_URL}/status.json") || {
   echo "⚠️  Unable to reach Red Hat status API"
   echo "   Proceeding without status check"
-  # Set safe defaults for outputs
   if [ -n "${GITHUB_OUTPUT:-}" ]; then
     {
       echo "status=unknown"
@@ -52,34 +49,37 @@ status_json=$(api_fetch "${BASE_URL}/status.json") || {
   exit 0
 }
 
-components_json=$(api_fetch "${BASE_URL}/components.json") || components_json='{"components":[]}'
-incidents_json=$(api_fetch "${BASE_URL}/incidents/unresolved.json") || incidents_json='{"incidents":[]}'
+components_file=$(mktemp)
+incidents_file=$(mktemp)
+trap 'rm -f "$components_file" "$incidents_file"' EXIT
 
-# Parse overall status
-indicator=$(echo "$status_json" | jq -r '.status.indicator')
-description=$(echo "$status_json" | jq -r '.status.description')
+api_fetch "${BASE_URL}/components.json" >"$components_file" &
+api_fetch "${BASE_URL}/incidents/unresolved.json" >"$incidents_file" &
+wait
 
-# Build group ID to name map and find non-operational components
-# Groups have "group": true, leaf components have "group": false with a group_id
+components_json=$(cat "$components_file")
+incidents_json=$(cat "$incidents_file")
+[ -z "$components_json" ] && components_json='{"components":[]}'
+[ -z "$incidents_json" ] && incidents_json='{"incidents":[]}'
+
+read -r indicator description < <(echo "$status_json" | jq -r '[.status.indicator, .status.description] | @tsv')
+
+# Statuspage.io uses "group": true for group headers, children reference via group_id
 group_map=$(echo "$components_json" | jq -r '
   [.components[] | select(.group == true)] | map({(.id): .name}) | add // {}
 ')
 
-# Get non-operational leaf components with their group names
 degraded_components=$(echo "$components_json" | jq --argjson groups "$group_map" '
   [.components[]
     | select(.group == false and .status != "operational")
     | {name, status, group_name: ($groups[.group_id] // "Ungrouped")}]
 ')
 
-# Apply component group filter if specified
 if [ -n "$COMPONENTS_FILTER" ]; then
-  # Convert newline-separated filter to JSON array (case-insensitive)
   filter_array=$(echo "$COMPONENTS_FILTER" | jq -R -s '
     split("\n") | map(select(length > 0) | ascii_downcase)
   ')
 
-  # Warn about filter names that match zero groups
   echo "$filter_array" | jq -r --argjson groups "$group_map" '
     ($groups | to_entries | map(.value | ascii_downcase)) as $group_names |
     .[] | select(. as $f | $group_names | index($f) | not)
@@ -87,12 +87,10 @@ if [ -n "$COMPONENTS_FILTER" ]; then
     echo "::warning::Component group filter '${unmatched}' did not match any groups"
   done
 
-  # Filter degraded components to only matching groups
   degraded_components=$(echo "$degraded_components" | jq --argjson filter "$filter_array" '
     [.[] | select(.group_name | ascii_downcase | IN($filter[]))]
   ')
 
-  # Filter incidents to only those affecting matching component groups
   incidents_json=$(echo "$incidents_json" | jq --argjson filter "$filter_array" --argjson groups "$group_map" '
     .incidents |= [.[]
       | select(.components as $comps |
@@ -108,13 +106,11 @@ fi
 degraded_count=$(echo "$degraded_components" | jq 'length')
 incident_count=$(echo "$incidents_json" | jq '.incidents | length')
 
-# Determine outage status
 is_outage="false"
 if [ "$indicator" != "none" ]; then
   is_outage="true"
 fi
 
-# Set GitHub Action outputs
 if [ -n "${GITHUB_OUTPUT:-}" ]; then
   {
     echo "status=${indicator}"
@@ -124,7 +120,6 @@ if [ -n "${GITHUB_OUTPUT:-}" ]; then
   } >>"$GITHUB_OUTPUT"
 fi
 
-# Print console summary
 case "$indicator" in
   "none")
     echo "✅ Red Hat Status: All Systems Operational"
@@ -146,7 +141,6 @@ case "$indicator" in
     ;;
 esac
 
-# List non-operational components
 if [ "$degraded_count" -gt 0 ]; then
   echo ""
   echo "   📋 Non-operational components ($degraded_count):"
@@ -162,7 +156,6 @@ if [ "$degraded_count" -gt 0 ]; then
   '
 fi
 
-# List unresolved incidents
 if [ "$incident_count" -gt 0 ]; then
   echo ""
   echo "   🚨 Unresolved incidents ($incident_count):"
@@ -178,7 +171,6 @@ fi
 
 echo ""
 
-# Write GitHub Step Summary
 if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
   {
     case "$indicator" in
@@ -218,8 +210,7 @@ if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
   } >>"$GITHUB_STEP_SUMMARY"
 fi
 
-# Conditional failure
-if [ "$FAIL_ON_OUTAGE" = "true" ] && [ "$indicator" != "none" ]; then
+if [ "$FAIL_ON_OUTAGE" = "true" ] && [ "$is_outage" = "true" ]; then
   echo "❌ Failing workflow: Red Hat status is '${indicator}' (fail-on-outage is enabled)"
   exit 1
 fi
