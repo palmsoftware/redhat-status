@@ -32,7 +32,7 @@ api_fetch() {
   return 1
 }
 
-echo "🔍 Checking Red Hat service status..."
+echo "🔍 Checking Red Hat service status (status.redhat.com)..."
 echo ""
 
 status_json=$(api_fetch "${BASE_URL}/status.json") || {
@@ -75,6 +75,8 @@ degraded_components=$(echo "$components_json" | jq --argjson groups "$group_map"
     | {name, status, group_name: ($groups[.group_id] // "Ungrouped")}]
 ')
 
+all_monitored_components='[]'
+
 if [ -n "$COMPONENTS_FILTER" ]; then
   filter_array=$(echo "$COMPONENTS_FILTER" | jq -R -s '
     split("\n") | map(select(length > 0) | ascii_downcase)
@@ -86,6 +88,13 @@ if [ -n "$COMPONENTS_FILTER" ]; then
   ' | while IFS= read -r unmatched; do
     echo "::warning::Component group filter '${unmatched}' did not match any groups"
   done
+
+  all_monitored_components=$(echo "$components_json" | jq --argjson groups "$group_map" --argjson filter "$filter_array" '
+    [.components[]
+      | select(.group == false)
+      | {name, status, group_name: ($groups[.group_id] // "Ungrouped")}
+      | select(.group_name | ascii_downcase | IN($filter[]))]
+  ')
 
   degraded_components=$(echo "$degraded_components" | jq --argjson filter "$filter_array" '
     [.[] | select(.group_name | ascii_downcase | IN($filter[]))]
@@ -141,7 +150,23 @@ case "$indicator" in
     ;;
 esac
 
-if [ "$degraded_count" -gt 0 ]; then
+if [ -n "$COMPONENTS_FILTER" ] && [ "$(echo "$all_monitored_components" | jq 'length')" -gt 0 ]; then
+  echo ""
+  echo "   📋 Monitored components:"
+  echo "$all_monitored_components" | jq -r '
+    group_by(.group_name) | .[] |
+    "   [\(.[0].group_name)]" ,
+    (.[] | "   \(
+      if .status == "operational" then "   ✅"
+      elif .status == "major_outage" then "   🔴"
+      elif .status == "partial_outage" then "   🟠"
+      elif .status == "degraded_performance" then "   🟡"
+      elif .status == "under_maintenance" then "   🔧"
+      else "   ⚪"
+      end
+    ) \(.name) — \(.status | gsub("_"; " "))")
+  '
+elif [ "$degraded_count" -gt 0 ]; then
   echo ""
   echo "   📋 Non-operational components ($degraded_count):"
   echo "$degraded_components" | jq -r '
