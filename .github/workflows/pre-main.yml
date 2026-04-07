@@ -67,7 +67,7 @@ jobs:
         uses: ./
         with:
           components: |
-            Red Hat OpenShift Cluster Manager
+            api.openshift.com
 
       - name: Verify filtered outputs
         run: |
