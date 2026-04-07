@@ -30,7 +30,7 @@ A GitHub Action that checks [Red Hat service health](https://status.redhat.com/)
   uses: palmsoftware/redhat-status@v0
   with:
     components: |
-      Red Hat OpenShift Cluster Manager
+      api.openshift.com
       Quay.io
 
 - name: React to outage
@@ -64,11 +64,12 @@ When run in GitHub Actions, the action writes a markdown summary to the workflow
 ## Component Groups
 
 Component group names for the `components` filter can be found on [status.redhat.com](https://status.redhat.com/). Examples include:
-- `Red Hat OpenShift Cluster Manager`
+- `api.openshift.com`
 - `Quay.io`
-- `Red Hat Subscription Management`
-- `Red Hat Customer Portal`
+- `Container Registries`
 - `console.redhat.com`
+- `developers.redhat.com`
+- `docs.redhat.com`
 
 ## License
 
