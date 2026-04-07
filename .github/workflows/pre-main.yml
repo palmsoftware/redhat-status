@@ -1,0 +1,77 @@
+name: Test Changes
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions: read-all
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install shfmt
+        uses: mfinelli/setup-shfmt@v2
+
+      - name: Run linters
+        run: make lint
+
+  integration-test:
+    runs-on: ubuntu-latest
+    needs: lint
+    if: ${{ needs.lint.result == 'success' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run action with defaults
+        id: status-check
+        uses: ./
+
+      - name: Verify outputs
+        run: |
+          echo "Status: ${{ steps.status-check.outputs.status }}"
+          echo "Is outage: ${{ steps.status-check.outputs.is-outage }}"
+          echo "Degraded count: ${{ steps.status-check.outputs.degraded-count }}"
+          echo "Incident count: ${{ steps.status-check.outputs.incident-count }}"
+
+          # Validate status is a known value
+          case "${{ steps.status-check.outputs.status }}" in
+            none|minor|major|critical|unknown) echo "✅ Valid status" ;;
+            *) echo "❌ Invalid status value"; exit 1 ;;
+          esac
+
+          # Validate is-outage is boolean
+          case "${{ steps.status-check.outputs.is-outage }}" in
+            true|false) echo "✅ Valid is-outage" ;;
+            *) echo "❌ Invalid is-outage value"; exit 1 ;;
+          esac
+
+          # Validate counts are non-negative integers
+          if ! [[ "${{ steps.status-check.outputs.degraded-count }}" =~ ^[0-9]+$ ]]; then
+            echo "❌ Invalid degraded-count"; exit 1
+          fi
+          if ! [[ "${{ steps.status-check.outputs.incident-count }}" =~ ^[0-9]+$ ]]; then
+            echo "❌ Invalid incident-count"; exit 1
+          fi
+
+          echo "✅ All outputs valid"
+
+      - name: Test with component filter
+        id: filtered-check
+        uses: ./
+        with:
+          components: |
+            Red Hat OpenShift Cluster Manager
+
+      - name: Verify filtered outputs
+        run: |
+          echo "Filtered status: ${{ steps.filtered-check.outputs.status }}"
+          echo "Filtered degraded count: ${{ steps.filtered-check.outputs.degraded-count }}"
+          echo "✅ Component filter test passed"

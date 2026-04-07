@@ -1,0 +1,41 @@
+name: 'Red Hat Status'
+description: 'Check Red Hat service health via status.redhat.com'
+
+branding:
+  icon: 'activity'
+  color: 'red'
+
+inputs:
+  fail-on-outage:
+    description: 'Fail the workflow step if Red Hat status is not fully operational'
+    required: false
+    default: 'false'
+  components:
+    description: 'Newline-separated list of component group names to filter on (default: all)'
+    required: false
+    default: ''
+
+outputs:
+  status:
+    description: 'Overall status indicator (none, minor, major, critical)'
+    value: ${{ steps.check.outputs.status }}
+  is-outage:
+    description: 'Whether any outage is detected (true or false)'
+    value: ${{ steps.check.outputs.is-outage }}
+  degraded-count:
+    description: 'Number of non-operational components'
+    value: ${{ steps.check.outputs.degraded-count }}
+  incident-count:
+    description: 'Number of unresolved incidents'
+    value: ${{ steps.check.outputs.incident-count }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Check Red Hat service status
+      id: check
+      shell: bash
+      env:
+        INPUT_FAIL_ON_OUTAGE: ${{ inputs.fail-on-outage }}
+        INPUT_COMPONENTS: ${{ inputs.components }}
+      run: ${{ github.action_path }}/scripts/check-status.sh
